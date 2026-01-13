@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Boogle - Game Loader</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script src="https://unpkg.com/lucide-react@0.263.1/dist/umd/lucide-react.min.js"></script>
+
+    <style>
+        /* Custom Font Imports embedded directly */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&display=swap');
+        
+        body { font-family: 'Inter', sans-serif; background-color: #0f0f13; }
+        
+        /* Custom Scrollbar from your code */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0f0f13; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        
+        .font-brand { font-family: 'Inter', sans-serif; letter-spacing: -0.05em; }
+        .animate-fade-in { animation: fadeIn 0.5s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // --- 1. SETUP & IMPORTS ---
+        const { useState, useEffect, useRef } = React;
+        
+        // Destructure icons from the global lucideReact object
+        const { 
+          Play, Maximize, RotateCcw, Monitor, Info, History, X, Loader2, 
+          Gamepad2, ChevronRight, ChevronLeft, Menu, ExternalLink, AlertCircle, 
+          Code, Zap, CheckCircle2, Search, FileCode, Eye, Minimize, Globe 
+        } = lucideReact;
+
+        // --- 2. HELPER COMPONENTS ---
+
+        const Button = ({ onClick, children, variant = 'primary', className = '', disabled = false }) => {
+          const baseStyle = "px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed";
+          const variants = {
+            primary: "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20",
+            secondary: "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700",
+            ghost: "hover:bg-slate-800/50 text-slate-400 hover:text-white"
+          };
+          return (
+            <button onClick={onClick} className={`${baseStyle} ${variants[variant]} ${className}`} disabled={disabled}>
+              {children}
+            </button>
+          );
+        };
+
+        const Modal = ({ isOpen, onClose, title, children }) => {
+          if (!isOpen) return null;
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+              <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-lg shadow-2xl overflow-hidden relative flex flex-col max-h-[90vh]">
+                <div className="p-5 border-b border-slate-800 flex justify-between items-center shrink-0">
+                  <h3 className="text-xl font-bold text-white">{title}</h3>
+                  <button onClick={onClose} className="text-slate-400 hover:text-white">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <div className="p-6 overflow-y-auto">
+                  {children}
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        // --- 3. MAIN APP ---
+
+        function App() {
+          const [urlInput, setUrlInput] = useState('');
+          const [currentGame, setCurrentGame] = useState(null);
+          const [loading, setLoading] = useState(false);
+          const [error, setError] = useState(null);
+          const [history, setHistory] = useState([]);
+          const [showGuide, setShowGuide] = useState(false);
+          const [showSource, setShowSource] = useState(false);
+          const [pageSource, setPageSource] = useState('');
+          const [scanResults, setScanResults] = useState([]);
+          const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+          const [inputType, setInputType] = useState(null);
+          const [isFullscreen, setIsFullscreen] = useState(false);
+          const gameContainerRef = useRef(null);
+
+          useEffect(() => {
+            const savedHistory = localStorage.getItem('itchPlayerHistory');
+            if (savedHistory) setHistory(JSON.parse(savedHistory));
+          }, []);
+
+          useEffect(() => {
+            if (currentGame) {
+              const newEntry = {
+                id: Date.now(),
+                url: currentGame.url,
+                title: currentGame.title || 'Game Session',
+                timestamp: new Date().toISOString()
+              };
+              const filteredHistory = history.filter(h => h.url !== currentGame.url);
+              const updatedHistory = [newEntry, ...filteredHistory].slice(0, 15);
+              
+              setHistory(updatedHistory);
+              localStorage.setItem('itchPlayerHistory', JSON.stringify(updatedHistory));
+            }
+          }, [currentGame]);
+
+          useEffect(() => {
+            const handleFullscreenChange = () => {
+              setIsFullscreen(!!document.fullscreenElement);
+            };
+            document.addEventListener('fullscreenchange', handleFullscreenChange);
+            return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+          }, []);
+
+          useEffect(() => {
+            if (!urlInput.trim()) {
+              setInputType(null);
+              return;
+            }
+            const input = urlInput.trim();
+            if (input.includes('<iframe')) {
+              setInputType('embed');
+            } else if (input.includes('html.itch.zone') || input.includes('hwcdn.net') || input.includes('itch.io/embed-upload')) {
+              setInputType('direct');
+            } else {
+              setInputType('page');
+            }
+          }, [urlInput]);
+
+          const extractUrl = (input) => {
+            if (!input) return null;
+            let url = null;
+
+            if (input.includes('<iframe')) {
+              const match = input.match(/src=["']([^"']+)["']/);
+              if (match && match[1]) {
+                url = match[1];
+              }
+            } 
+            else if (input.includes('html.itch.zone') || input.includes('hwcdn.net') || input.includes('itch.io/embed-upload')) {
+               url = input;
+            }
+
+            if (url) {
+                if (url.startsWith('//')) return 'https:' + url;
+                if (!url.startsWith('http')) return 'https://' + url;
+                return url;
+            }
+            return null;
+          };
+
+          const performDeepScan = (html) => {
+            const results = [];
+            const uniqueUrls = new Set();
+
+            const hostRegex = /https:\/\/(?:[a-zA-Z0-9-]+\.)?(?:html\.itch\.zone|hwcdn\.net|itch\.io\/embed-upload)\/[^"'\s<>)]+/g;
+            
+            const hostMatches = html.match(hostRegex);
+            if (hostMatches) {
+                hostMatches.forEach(match => {
+                    let clean = match.split('"')[0].split("'")[0].split('\\')[0];
+                    if (!uniqueUrls.has(clean)) {
+                        uniqueUrls.add(clean);
+                        results.push({ url: clean, type: 'Detected Game Host' });
+                    }
+                });
+            }
+
+            const dataIframeRegex = /data-iframe=["']([^"']+)["']/g;
+            let iframeMatch;
+            while ((iframeMatch = dataIframeRegex.exec(html)) !== null) {
+                let clean = iframeMatch[1];
+                if (clean.startsWith('//')) clean = 'https:' + clean;
+                if (!uniqueUrls.has(clean)) {
+                    uniqueUrls.add(clean);
+                    results.push({ url: clean, type: 'Hidden Frame Attribute' });
+                }
+            }
+
+            const jsonUrlRegex = /"url":"(https:\\\/\\\/[^"]+(?:html\.itch\.zone|hwcdn\.net)[^"]+)"/g;
+            let jsonMatch;
+            while ((jsonMatch = jsonUrlRegex.exec(html)) !== null) {
+                let clean = jsonMatch[1].replace(/\\/g, '');
+                if (!uniqueUrls.has(clean)) {
+                     uniqueUrls.add(clean);
+                    results.push({ url: clean, type: 'JSON Config Link' });
+                }
+            }
+
+            return results;
+          };
+
+          const handlePlay = async (overrideUrl = null) => {
+            setLoading(true);
+            setError(null);
+            setScanResults([]);
+            setPageSource('');
+            
+            if (!overrideUrl) setCurrentGame(null);
+
+            let cleanInput = overrideUrl || urlInput.trim();
+            if (!cleanInput) {
+                setLoading(false);
+                return;
+            }
+
+            const directUrl = extractUrl(cleanInput);
+
+            if (directUrl) {
+              setCurrentGame({ url: directUrl, title: 'Embedded Game' });
+              setLoading(false);
+            } else {
+              if (!cleanInput.startsWith('http')) cleanInput = 'https://' + cleanInput;
+
+              try {
+                let htmlContent = '';
+                
+                const safeFetch = async (url) => {
+                    try {
+                        const res = await fetch(url);
+                        if (!res.ok) return null;
+                        return res;
+                    } catch (e) {
+                        console.warn("Fetch failed for:", url);
+                        return null;
+                    }
+                };
+
+                const proxyUrl1 = `https://api.allorigins.win/get?url=${encodeURIComponent(cleanInput)}`;
+                const res1 = await safeFetch(proxyUrl1);
+                if (res1) {
+                    const data = await res1.json();
+                    if (data.contents) htmlContent = data.contents;
+                }
+
+                if (!htmlContent) {
+                    const proxyUrl2 = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(cleanInput)}`;
+                    const res2 = await safeFetch(proxyUrl2);
+                    if (res2) {
+                        htmlContent = await res2.text();
+                    }
+                }
+
+                if (!htmlContent) {
+                    setError("Could not load page source.");
+                    setLoading(false);
+                    return;
+                }
+
+                setPageSource(htmlContent);
+
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(htmlContent, 'text/html');
+                const title = doc.querySelector('.game_title')?.textContent || 'Detected Game';
+                
+                const iframe = doc.querySelector('iframe');
+                
+                if (iframe && iframe.src) {
+                  setCurrentGame({ url: iframe.src, title });
+                } else {
+                     const deepLinks = performDeepScan(htmlContent);
+                     if (deepLinks.length > 0) {
+                         setScanResults(deepLinks);
+                         setError("Links found.");
+                     } else {
+                         setError("No direct streams found.");
+                     }
+                     setShowGuide(true);
+                }
+                
+              } catch (err) {
+                console.warn("Extraction Error:", err);
+                setError("Error loading content.");
+                setShowGuide(true); 
+              } finally {
+                setLoading(false);
+              }
+            }
+          };
+
+          const loadFromHistory = (item) => {
+            setUrlInput(item.url);
+            setCurrentGame({ url: item.url, title: item.title });
+          };
+
+          const clearHistory = () => {
+            setHistory([]);
+            localStorage.removeItem('itchPlayerHistory');
+          };
+
+          const toggleFullscreen = () => {
+            if (!document.fullscreenElement) {
+              gameContainerRef.current?.requestFullscreen().catch(err => {
+                console.error(`Error attempting to enable fullscreen: ${err.message}`);
+              });
+            } else {
+              document.exitFullscreen();
+            }
+          };
+
+          return (
+            <div className="flex h-screen overflow-hidden bg-[#0f0f13] text-slate-200 font-sans">
+              <div className={`${isSidebarOpen ? 'w-80' : 'w-0'} bg-[#0a0a0c] border-r border-slate-800 transition-all duration-300 flex flex-col relative overflow-hidden`}>
+                <div className="p-6">
+                  <div className="flex items-center gap-3 mb-8 text-blue-500">
+                    <Globe className="w-8 h-8" />
+                    <span className="text-2xl font-extrabold tracking-tighter text-white font-brand">Boogle</span>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">URL / Code</label>
+                        {inputType === 'embed' && <span className="text-[10px] bg-green-900/50 text-green-400 px-2 py-0.5 rounded border border-green-800 flex items-center gap-1"><CheckCircle2 className="w-3 h-3"/> Embed</span>}
+                        {inputType === 'direct' && <span className="text-[10px] bg-blue-900/50 text-blue-400 px-2 py-0.5 rounded border border-blue-800 flex items-center gap-1"><CheckCircle2 className="w-3 h-3"/> Direct</span>}
+                      </div>
+                      <textarea 
+                        value={urlInput}
+                        onChange={(e) => setUrlInput(e.target.value)}
+                        placeholder='Paste URL or Embed Code...'
+                        className={`w-full bg-slate-900 border rounded-lg p-3 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent h-28 resize-none placeholder:text-slate-600 transition-colors ${inputType === 'embed' ? 'border-green-500/50' : 'border-slate-700'}`}
+                      />
+                    </div>
+                    
+                    <Button onClick={() => handlePlay()} disabled={!urlInput || loading} className="w-full">
+                      {loading ? <Loader2 className="animate-spin w-5 h-5" /> : <Search className="w-5 h-5" />}
+                      {loading ? 'Scanning...' : 'Boogle It'}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-6 pb-6 border-t border-slate-800/50 mt-2 pt-6">
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-sm font-medium text-slate-400 flex items-center gap-2">
+                      <History className="w-4 h-4" /> Recents
+                    </h3>
+                    {history.length > 0 && (
+                      <button onClick={clearHistory} className="text-[10px] text-slate-600 hover:text-blue-500 uppercase font-bold tracking-wider">Clear</button>
+                    )}
+                  </div>
+                  
+                  <div className="space-y-2">
+                    {history.length === 0 ? (
+                      <div className="text-center py-8 text-slate-700 text-sm italic">No recent pages.</div>
+                    ) : (
+                      history.map(item => (
+                        <div key={item.id} onClick={() => loadFromHistory(item)} 
+                          className="group p-3 rounded-lg bg-slate-900/50 hover:bg-slate-800 border border-transparent hover:border-slate-700 cursor-pointer transition-all">
+                          <div className="font-medium text-slate-300 truncate text-sm group-hover:text-blue-400">{item.title}</div>
+                          <div className="text-xs text-slate-600 truncate mt-1 font-mono">{item.url}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex-1 flex flex-col h-full bg-[#13131a] relative">
+                
+                <button 
+                  onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                  className={`absolute top-4 z-20 p-2 bg-slate-800 text-slate-400 hover:text-white rounded-full shadow-lg border border-slate-700 transition-all ${isSidebarOpen ? 'left-[-1rem]' : 'left-4'}`}
+                >
+                  {isSidebarOpen ? <ChevronLeft className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+                </button>
+
+                {currentGame ? (
+                  <div ref={gameContainerRef} className="flex-1 w-full h-full relative group bg-black">
+                    <iframe 
+                      src={currentGame.url} 
+                      className="w-full h-full border-0"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen; gamepad" 
+                      allowFullScreen
+                    ></iframe>
+                    
+                    <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex gap-2">
+                      <Button variant="secondary" onClick={toggleFullscreen}>
+                        {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+                      </Button>
+                      <Button variant="secondary" onClick={() => setCurrentGame(null)}>
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[url('https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=2070&auto=format&fit=crop')] bg-cover bg-center">
+                    <div className="absolute inset-0 bg-black/80 backdrop-blur-sm"></div>
+                    
+                    <div className="relative z-10 max-w-2xl">
+                      <div className="w-20 h-20 bg-blue-600/20 rounded-full flex items-center justify-center mx-auto mb-6 backdrop-blur-md border border-blue-500/30">
+                        <Globe className="w-10 h-10 text-blue-500" />
+                      </div>
+                      <h1 className="text-6xl font-extrabold text-white mb-6 font-brand tracking-tighter">Boogle</h1>
+                      <p className="text-xl text-slate-300 mb-8 leading-relaxed">
+                          The unblocked proxy loader.
+                      </p>
+                      
+                      {error && (
+                        <div className="bg-red-900/50 border border-red-700/50 text-red-200 px-6 py-4 rounded-lg mb-8 inline-block animate-fade-in">
+                          <div className="flex items-center gap-2 mb-2 font-bold">
+                            <Search className="w-5 h-5" />
+                            Deep Scan Active
+                          </div>
+                          <p className="text-sm opacity-90">{error}</p>
+                          <button onClick={() => setShowGuide(true)} className="mt-3 text-xs bg-red-900/80 hover:bg-red-800 px-3 py-1.5 rounded uppercase font-semibold tracking-wide">
+                            View Results
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <Modal isOpen={showGuide} onClose={() => { setShowGuide(false); setShowSource(false); }} title={showSource ? "Source Code" : "Scan Results"}>
+                
+                {showSource ? (
+                    <div className="space-y-4">
+                        <p className="text-sm text-slate-400">
+                           Raw source detected.
+                        </p>
+                        <textarea 
+                            readOnly 
+                            className="w-full h-96 bg-black p-3 font-mono text-xs text-green-400 rounded border border-slate-700"
+                            value={pageSource} 
+                        />
+                        <Button variant="secondary" onClick={() => setShowSource(false)} className="w-full">Back</Button>
+                    </div>
+                ) : (
+                    <div className="space-y-6 text-slate-300">
+                        {scanResults.length > 0 ? (
+                            <div>
+                                <p className="text-sm mb-4 text-green-400">Streams detected:</p>
+                                <div className="space-y-2">
+                                    {scanResults.map((res, idx) => (
+                                        <button 
+                                            key={idx}
+                                            onClick={() => {
+                                                handlePlay(res.url);
+                                                setShowGuide(false);
+                                            }}
+                                            className="w-full text-left p-3 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-blue-500 transition-all group"
+                                        >
+                                            <div className="text-xs font-bold text-slate-400 mb-1">{res.type}</div>
+                                            <div className="text-xs font-mono text-blue-300 break-all group-hover:text-white">
+                                                {res.url}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="p-4 bg-red-900/20 border border-red-900/50 rounded-lg text-center">
+                                <AlertCircle className="w-8 h-8 text-red-500 mx-auto mb-2" />
+                                <p className="text-white font-bold">No streams found.</p>
+                                <p className="text-xs text-slate-400 mt-1">Try Manual Override below.</p>
+                            </div>
+                        )}
+                        
+                        <div className="pt-4 border-t border-slate-800">
+                            <Button variant="secondary" onClick={() => setShowSource(true)} className="w-full">
+                                <FileCode className="w-4 h-4" /> View Source
+                            </Button>
+                        </div>
+                    </div>
+                )}
+              </Modal>
+
+            </div>
+          );
+        }
+
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
+
+    </script>
+</body>
+</html>
